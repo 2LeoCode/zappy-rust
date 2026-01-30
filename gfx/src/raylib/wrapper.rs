@@ -1,12 +1,20 @@
 use {
-  super::bindings::InitWindow,
   crate::raylib::bindings::{
     self, BeginDrawing, ClearBackground, CloseWindow, DisableCursor, DrawText, EnableCursor,
-    EndDrawing, GetCurrentMonitor, GetMonitorRefreshRate, SetTargetFPS, Vector3, WindowShouldClose,
+    EndDrawing, GetCurrentMonitor, GetMonitorRefreshRate, InitWindow, SetTargetFPS,
+    WindowShouldClose,
   },
   std::ffi::{CString, NulError, c_int},
   thiserror::Error,
 };
+
+use crate::raylib::bindings::{
+  BeginMode3D, CameraMode_CAMERA_CUSTOM, CameraMode_CAMERA_FIRST_PERSON, CameraMode_CAMERA_FREE,
+  CameraMode_CAMERA_ORBITAL, CameraMode_CAMERA_THIRD_PERSON, CameraProjection_CAMERA_ORTHOGRAPHIC,
+  CameraProjection_CAMERA_PERSPECTIVE, DrawCube, DrawCubeWires, DrawGrid, EndMode3D, PlaySound,
+  UpdateCamera,
+};
+pub use crate::raylib::bindings::{Vector2, Vector3, Vector4};
 
 #[derive(Error, Debug)]
 pub enum InitWindowError {
@@ -20,6 +28,15 @@ pub enum DrawTextError {
   TextContainsNul(#[from] NulError),
 }
 
+#[derive(Error, Debug)]
+pub enum Camera3DError {
+  #[error("invalid camera projection value: {0}")]
+  InvalidProjection(u32),
+  #[error("invalid camera mode value: {0}")]
+  InvalidMode(u32),
+}
+
+#[derive(Clone)]
 pub enum Color {
   LightGray,
   Gray,
@@ -48,6 +65,41 @@ pub enum Color {
   Magenta,
   RayWhite,
   Custom(u8, u8, u8, u8),
+}
+
+#[derive(Clone)]
+pub enum Camera3DProjection {
+  Perspective,
+  Orthographic,
+}
+
+#[derive(Clone)]
+pub enum Camera3DMode {
+  Free,
+  Custom,
+  Orbital,
+  FirstPerson,
+  ThirdPerson,
+}
+
+pub struct Window {
+  title: CString,
+}
+
+pub struct Monitor {
+  id: i32,
+}
+
+pub struct Pen;
+pub struct Pen3D;
+
+#[derive(Clone)]
+pub struct Camera3D {
+  pub position: Vector3,
+  pub target: Vector3,
+  pub up: Vector3,
+  pub fovy: f32,
+  pub projection: Camera3DProjection,
 }
 
 impl From<Color> for bindings::Color {
@@ -215,23 +267,95 @@ impl From<Color> for bindings::Color {
   }
 }
 
-pub struct Window {
-  title: CString,
+impl From<Camera3DProjection> for u32 {
+  fn from(value: Camera3DProjection) -> Self {
+    use Camera3DProjection::*;
+    match value {
+      Perspective => CameraProjection_CAMERA_PERSPECTIVE,
+      Orthographic => CameraProjection_CAMERA_ORTHOGRAPHIC,
+    }
+  }
 }
-pub struct Pen;
-pub struct Monitor(i32);
-pub struct Camera3D {
-  pub position: Vector3,
-  pub target: Vector3,
-  pub up: Vector3,
-  pub fovy: f32,
-  pub projection: i32,
+
+impl TryFrom<u32> for Camera3DProjection {
+  type Error = Camera3DError;
+  fn try_from(value: u32) -> Result<Self, Self::Error> {
+    use Camera3DError::*;
+    use Camera3DProjection::*;
+    match value {
+      CameraProjection_CAMERA_PERSPECTIVE => Ok(Perspective),
+      CameraProjection_CAMERA_ORTHOGRAPHIC => Ok(Orthographic),
+      value => Err(InvalidProjection(value)),
+    }
+  }
+}
+
+impl From<Camera3DMode> for u32 {
+  fn from(value: Camera3DMode) -> Self {
+    use Camera3DMode::*;
+    match value {
+      Free => CameraMode_CAMERA_FREE,
+      Custom => CameraMode_CAMERA_CUSTOM,
+      Orbital => CameraMode_CAMERA_ORBITAL,
+      FirstPerson => CameraMode_CAMERA_FIRST_PERSON,
+      ThirdPerson => CameraMode_CAMERA_THIRD_PERSON,
+    }
+  }
+}
+
+impl TryFrom<u32> for Camera3DMode {
+  type Error = Camera3DError;
+  fn try_from(value: u32) -> Result<Self, Self::Error> {
+    use Camera3DError::*;
+    use Camera3DMode::*;
+    match value {
+      CameraMode_CAMERA_FREE => Ok(Free),
+      CameraMode_CAMERA_CUSTOM => Ok(Custom),
+      CameraMode_CAMERA_ORBITAL => Ok(Orbital),
+      CameraMode_CAMERA_FIRST_PERSON => Ok(FirstPerson),
+      CameraMode_CAMERA_THIRD_PERSON => Ok(ThirdPerson),
+      value => Err(InvalidMode(value)),
+    }
+  }
 }
 
 impl Drop for Window {
   fn drop(&mut self) {
     unsafe {
       CloseWindow();
+    }
+  }
+}
+
+impl Window {
+  pub fn title(&self) -> &str {
+    unsafe { self.title.to_str().unwrap_unchecked() }
+  }
+
+  pub fn should_close(&self) -> bool {
+    unsafe { WindowShouldClose() }
+  }
+
+  pub fn begin_drawing(&self) -> Pen {
+    unsafe { BeginDrawing() }
+    Pen {}
+  }
+
+  pub fn enable_cursor(&self) {
+    unsafe { EnableCursor() }
+  }
+
+  pub fn disable_cursor(&self) {
+    unsafe { DisableCursor() }
+  }
+
+  pub fn set_target_fps(&self, fps: i32) {
+    unsafe { SetTargetFPS(fps as c_int) }
+  }
+
+  pub fn get_current_monitor(&self) -> Monitor {
+    Monitor {
+      id: unsafe { GetCurrentMonitor() } as i32,
     }
   }
 }
@@ -244,70 +368,9 @@ impl Drop for Pen {
   }
 }
 
-impl From<bindings::Camera3D> for Camera3D {
-  fn from(value: bindings::Camera3D) -> Self {
-    Camera3D {
-      position: value.position,
-      target: value.target,
-      up: value.up,
-      fovy: value.fovy,
-      projection: value.projection as i32,
-    }
-  }
-}
-
-impl From<Camera3D> for bindings::Camera3D {
-  fn from(value: Camera3D) -> Self {
-    bindings::Camera3D {
-      position: value.position,
-      target: value.target,
-      up: value.up,
-      fovy: value.fovy,
-      projection: value.projection as c_int,
-    }
-  }
-}
-
-impl Window {
-  pub fn should_close(&self) -> bool {
-    unsafe { WindowShouldClose() }
-  }
-
-  pub fn begin_drawing(&self) -> Pen {
-    unsafe {
-      BeginDrawing();
-    }
-    Pen {}
-  }
-
-  pub fn enable_cursor(&self) {
-    unsafe {
-      EnableCursor();
-    }
-  }
-
-  pub fn disable_cursor(&self) {
-    unsafe {
-      DisableCursor();
-    }
-  }
-
-  pub fn set_target_fps(&self, fps: i32) {
-    unsafe {
-      SetTargetFPS(fps as c_int);
-    }
-  }
-
-  pub fn get_current_monitor(&self) -> Monitor {
-    unsafe { Monitor(GetCurrentMonitor() as i32) }
-  }
-}
-
 impl Pen {
   pub fn clear_background(&self, color: Color) {
-    unsafe {
-      ClearBackground(color.into());
-    }
+    unsafe { ClearBackground(color.into()) }
   }
 
   pub fn draw_text(
@@ -320,24 +383,90 @@ impl Pen {
   ) -> Result<(), DrawTextError> {
     let text = CString::new(text)?;
 
-    unsafe {
-      DrawText(text.as_ptr(), pos_x, pos_y, font_size, color.into());
-    }
+    unsafe { DrawText(text.as_ptr(), pos_x, pos_y, font_size, color.into()) }
     Ok(())
+  }
+
+  pub fn begin_mode_3d(&self, camera: Camera3D) -> Pen3D {
+    unsafe { BeginMode3D(camera.into()) }
+    Pen3D {}
+  }
+}
+
+impl TryFrom<bindings::Camera3D> for Camera3D {
+  type Error = Camera3DError;
+  fn try_from(value: bindings::Camera3D) -> Result<Self, Self::Error> {
+    Ok(Camera3D {
+      position: value.position,
+      target: value.target,
+      up: value.up,
+      fovy: value.fovy,
+      projection: Camera3DProjection::try_from(value.projection as u32)?,
+    })
+  }
+}
+
+impl From<Camera3D> for bindings::Camera3D {
+  fn from(value: Camera3D) -> Self {
+    bindings::Camera3D {
+      position: value.position,
+      target: value.target,
+      up: value.up,
+      fovy: value.fovy,
+      projection: u32::from(value.projection) as i32,
+    }
+  }
+}
+
+impl Camera3D {
+  pub fn update(&mut self, mode: Camera3DMode) {
+    let mut cam = bindings::Camera3D::from(self.clone());
+    unsafe {
+      UpdateCamera(
+        &mut cam as *mut bindings::Camera3D,
+        u32::from(mode) as c_int,
+      )
+    }
+    *self = unsafe { cam.try_into().unwrap_unchecked() }
   }
 }
 
 impl Monitor {
   pub fn get_refresh_rate(&self) -> i32 {
-    unsafe { GetMonitorRefreshRate(self.0 as c_int) }
+    (unsafe { GetMonitorRefreshRate(self.id as c_int) }) as i32
+  }
+}
+
+impl Drop for Pen3D {
+  fn drop(&mut self) {
+    unsafe { EndMode3D() }
+  }
+}
+
+impl Pen3D {
+  pub fn draw_grid(&self, slices: i32, spacing: f32) {
+    unsafe { DrawGrid(slices as c_int, spacing) }
+  }
+
+  pub fn draw_cube(&self, position: Vector3, width: f32, height: f32, length: f32, color: Color) {
+    unsafe { DrawCube(position, width, height, length, color.into()) }
+  }
+
+  pub fn draw_cube_wires(
+    &self,
+    position: Vector3,
+    width: f32,
+    height: f32,
+    length: f32,
+    color: Color,
+  ) {
+    unsafe { DrawCubeWires(position, width, height, length, color.into()) }
   }
 }
 
 pub fn init_window(width: i32, height: i32, title: &str) -> Result<Window, InitWindowError> {
   let title = CString::new(title)?;
 
-  unsafe {
-    InitWindow(width as c_int, height as c_int, title.as_ptr());
-  }
+  unsafe { InitWindow(width as c_int, height as c_int, title.as_ptr()) }
   Ok(Window { title })
 }
